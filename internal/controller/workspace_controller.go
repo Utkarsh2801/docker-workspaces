@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -25,12 +27,14 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
+	"github.com/utkarsh2801/docker-workspaces/internal/compute"
 )
 
 // WorkspaceReconciler reconciles a Workspace object
 type WorkspaceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme  *runtime.Scheme
+	Compute compute.Provider
 }
 
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
@@ -49,9 +53,52 @@ type WorkspaceReconciler struct {
 func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var ws workspacesv1alpha1.Workspace
+	if err := r.Get(ctx, req.NamespacedName, &ws); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-	return ctrl.Result{}, nil
+	uid := string(ws.UID)
+
+	inst, err := r.Compute.Get(ctx, uid)
+	if errors.Is(err, compute.ErrNotFound) || (err == nil && inst.State != "running") {
+		logf.Log.Info("Creating workspace", "uid", uid)
+		inst, err = r.Compute.Create(ctx, compute.CreateRequest{
+			UID:   uid,
+			Owner: ws.Spec.Owner,
+			Image: ws.Spec.Image,
+			Port:  int(ws.Spec.Port),
+		})
+	}
+
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	want := workspacesv1alpha1.WorkspaceStatus{
+		Phase:       workspacesv1alpha1.PhaseCreating,
+		ContainerID: inst.ID,
+		IP:          inst.IP,
+		URL:         inst.URL,
+		Message:     "container" + inst.State,
+	}
+
+	if inst.State == "running" {
+		want.Phase = workspacesv1alpha1.PhaseRunning
+	}
+
+	if ws.Status != want {
+		ws.Status = want
+		if err := r.Status().Update(ctx, &ws); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	if want.Phase != workspacesv1alpha1.PhaseRunning {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

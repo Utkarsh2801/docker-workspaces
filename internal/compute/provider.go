@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -27,11 +28,11 @@ type CreateRequest struct {
 }
 
 type Provider interface {
-	Create(req CreateRequest) (string, error)
+	Create(ctx context.Context, req CreateRequest) (*Instance, error)
 
-	Delete(id string) error
+	Delete(ctx context.Context, id string) error
 
-	Get(id string) (*Instance, error)
+	Get(ctx context.Context, id string) (*Instance, error)
 
-	List() ([]*Instance, error)
+	List() (ctx context.Context, inst []*Instance, err error)
 }
