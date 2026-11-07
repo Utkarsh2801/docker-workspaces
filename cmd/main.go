@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
+	"github.com/utkarsh2801/docker-workspaces/internal/compute"
 	"github.com/utkarsh2801/docker-workspaces/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -178,13 +179,21 @@ func main() {
 		// LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
+		setupLog.Error(err, "Failed to create manager")
+		os.Exit(1)
+	}
+
+	dockerProvider, err := compute.NewDockerProvider()
+
+	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
 		os.Exit(1)
 	}
 
 	if err := (&controller.WorkspaceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		Compute: dockerProvider,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "workspace")
 		os.Exit(1)

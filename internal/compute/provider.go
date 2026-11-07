@@ -34,5 +34,5 @@ type Provider interface {
 
 	Get(ctx context.Context, id string) (*Instance, error)
 
-	List() (ctx context.Context, inst []*Instance, err error)
+	List(ctx context.Context) ([]*Instance, error)
 }

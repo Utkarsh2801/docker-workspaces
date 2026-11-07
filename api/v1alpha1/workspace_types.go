@@ -94,11 +94,6 @@ type Workspace struct {
 	Status WorkspaceStatus `json:"status,omitzero"`
 }
 
-// DeepCopyObject implements [cacheapi.Object].
-func (in *Workspace) DeepCopyObject() runtime.Object {
-	panic("unimplemented")
-}
-
 // +kubebuilder:object:root=true
 
 // WorkspaceList contains a list of Workspace

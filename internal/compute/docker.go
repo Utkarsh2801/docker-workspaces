@@ -145,7 +145,7 @@ func (p *DockerProvider) Delete(ctx context.Context, uid string) error {
 	return nil
 }
 
-func (p *DockerProvider) List(ctx context.Context) ([]Instance, error) {
+func (p *DockerProvider) List(ctx context.Context) ([]*Instance, error) {
 	res, err := p.client.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManagedBy+"="+managedValue)})
 	if err != nil {
 		return nil, err
@@ -153,10 +153,10 @@ func (p *DockerProvider) List(ctx context.Context) ([]Instance, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Instance, 0, len(res.Items))
+	out := make([]*Instance, 0, len(res.Items))
 	for _, container := range res.Items {
 		// Convert each container to an Instance
-		inst := Instance{
+		inst := &Instance{
 			ID:        container.ID,
 			UID:       container.Labels[LabeUID],
 			State:     string(container.State),
