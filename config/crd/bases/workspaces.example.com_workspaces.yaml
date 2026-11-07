@@ -1,0 +1,95 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: workspaces.workspaces.example.com
+spec:
+  group: workspaces.example.com
+  names:
+    kind: Workspace
+    listKind: WorkspaceList
+    plural: workspaces
+    shortNames:
+    - ws
+    singular: workspace
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.ip
+      name: IP
+      type: string
+    - jsonPath: .status.url
+      name: URL
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Workspace is the Schema for the workspaces API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of Workspace
+            properties:
+              image:
+                description: Image is the Docker image to use for the workspace.
+                type: string
+              owner:
+                description: Owner is the email address of the user who owns this
+                  workspace.
+                pattern: ^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$
+                type: string
+              port:
+                default: 80
+                description: Port is the port to expose for the workspace.
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+            required:
+            - owner
+            type: object
+          status:
+            description: status defines the observed state of Workspace
+            properties:
+              containerID:
+                type: string
+              ip:
+                type: string
+              message:
+                type: string
+              phase:
+                type: string
+              url:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

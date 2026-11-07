@@ -1,0 +1,7 @@
+apiVersion: workspaces.example.com/v1alpha1
+kind: Workspace
+metadata:
+  name: alice
+spec:
+  owner: alice@example.com
+  image: traefik/whoami

@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: docker-workspace
 repo: github.com/utkarsh2801/docker-workspaces
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: example.com
+  group: workspaces
+  kind: Workspace
+  path: github.com/utkarsh2801/docker-workspaces/api/v1alpha1
+  version: v1alpha1
 version: "3"
