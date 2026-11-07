@@ -24,11 +24,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
 	"github.com/utkarsh2801/docker-workspaces/internal/compute"
 )
+
+const containerFinalizerName = "workspaces.example.com/container"
 
 // WorkspaceReconciler reconciles a Workspace object
 type WorkspaceReconciler struct {
@@ -59,6 +62,23 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	uid := string(ws.UID)
+
+	if !ws.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(&ws, containerFinalizerName) {
+			return ctrl.Result{}, nil
+		}
+		logf.Log.Info("Deleting workspace", "uid", uid)
+		if err := r.Compute.Delete(ctx, uid); err != nil {
+			return ctrl.Result{}, err
+		}
+		controllerutil.RemoveFinalizer(&ws, containerFinalizerName)
+		return ctrl.Result{}, r.Update(ctx, &ws)
+	}
+
+	if !controllerutil.ContainsFinalizer(&ws, containerFinalizerName) {
+		controllerutil.AddFinalizer(&ws, containerFinalizerName)
+		return ctrl.Result{}, r.Update(ctx, &ws)
+	}
 
 	inst, err := r.Compute.Get(ctx, uid)
 	if errors.Is(err, compute.ErrNotFound) || (err == nil && inst.State != "running") {
