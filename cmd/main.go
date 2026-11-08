@@ -38,6 +38,7 @@ import (
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
 	"github.com/utkarsh2801/docker-workspaces/internal/compute"
 	"github.com/utkarsh2801/docker-workspaces/internal/controller"
+	webhookv1alpha1 "github.com/utkarsh2801/docker-workspaces/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -197,6 +198,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "workspace")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "Workspace")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

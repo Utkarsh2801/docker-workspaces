@@ -1,0 +1,7 @@
+apiVersion: workspaces.example.com/v1alpha1
+kind: Workspace
+metadata:
+  name: evil
+spec:
+  owner: eve@example.com
+  image: alpine

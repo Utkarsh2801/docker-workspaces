@@ -1,0 +1,6 @@
+apiVersion: workspaces.example.com/v1alpha1
+kind: Workspace
+metadata:
+  name: noimage
+spec:
+  owner: Bob@example.com
