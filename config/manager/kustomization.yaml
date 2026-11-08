@@ -1,2 +1,10 @@
 resources:
 - manager.yaml
+patches:
+- path: docker_socket_patch.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+- name: controller
+  newName: mini-workspaces
+  newTag: dev

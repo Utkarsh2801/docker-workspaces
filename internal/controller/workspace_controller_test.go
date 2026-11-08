@@ -1,87 +1,297 @@
-/*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
 	"context"
-
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"errors"
+	"testing"
+	"time"
 
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
+	"github.com/utkarsh2801/docker-workspaces/internal/compute"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-var _ = Describe("Workspace Controller", func() {
-	Context("When reconciling a resource", func() {
-		const (
-			resourceName      = "test-resource"
-			resourceNamespace = "default"
-		)
+var testUID = types.UID("workspace-uid")
 
-		ctx := context.Background()
+func newTestReconciler(t *testing.T, workspace *workspacesv1alpha1.Workspace, provider *FakeProvider) (*WorkspaceReconciler, client.Client) {
+	t.Helper()
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: resourceNamespace,
-		}
-		workspace := &workspacesv1alpha1.Workspace{}
+	scheme := runtime.NewScheme()
+	if err := workspacesv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Workspace API to scheme: %v", err)
+	}
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind Workspace")
-			err := k8sClient.Get(ctx, typeNamespacedName, workspace)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &workspacesv1alpha1.Workspace{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: resourceNamespace,
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
+	builder := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&workspacesv1alpha1.Workspace{})
+	if workspace != nil {
+		builder = builder.WithObjects(workspace)
+	}
+	k8sClient := builder.Build()
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &workspacesv1alpha1.Workspace{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+	return &WorkspaceReconciler{
+		Client:  k8sClient,
+		Scheme:  scheme,
+		Compute: provider,
+	}, k8sClient
+}
 
-			By("Cleanup the specific resource instance Workspace")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &WorkspaceReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
+func testWorkspace(withFinalizer bool) *workspacesv1alpha1.Workspace {
+	finalizers := []string(nil)
+	if withFinalizer {
+		finalizers = []string{containerFinalizerName}
+	}
+	return &workspacesv1alpha1.Workspace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-workspace",
+			Namespace:  "default",
+			UID:        testUID,
+			Finalizers: finalizers,
+		},
+		Spec: workspacesv1alpha1.WorkspaceSpec{
+			Owner: "owner@example.com",
+			Image: "example/image:latest",
+			Port:  8080,
+		},
+	}
+}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
-		})
+func reconcileWorkspace(t *testing.T, reconciler *WorkspaceReconciler) (ctrl.Result, error) {
+	t.Helper()
+	return reconciler.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "test-workspace", Namespace: "default"},
 	})
-})
+}
+
+func TestReconcileNotFound(t *testing.T) {
+	provider := &FakeProvider{}
+	reconciler, _ := newTestReconciler(t, nil, provider)
+
+	result, err := reconcileWorkspace(t, reconciler)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result != (ctrl.Result{}) {
+		t.Errorf("Reconcile() result = %+v, want empty result", result)
+	}
+	if len(provider.Created) != 0 || len(provider.Deleted) != 0 {
+		t.Errorf("provider was called for a missing Workspace: created=%d deleted=%d", len(provider.Created), len(provider.Deleted))
+	}
+}
+
+func TestReconcileAddsFinalizerBeforeProvisioning(t *testing.T) {
+	provider := &FakeProvider{}
+	reconciler, k8sClient := newTestReconciler(t, testWorkspace(false), provider)
+
+	result, err := reconcileWorkspace(t, reconciler)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result != (ctrl.Result{}) {
+		t.Errorf("Reconcile() result = %+v, want empty result", result)
+	}
+	if len(provider.Created) != 0 {
+		t.Fatalf("Create() called %d times before finalizer was stored, want 0", len(provider.Created))
+	}
+
+	var got workspacesv1alpha1.Workspace
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: "test-workspace", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get Workspace after reconcile: %v", err)
+	}
+	if !containsFinalizer(got.Finalizers, containerFinalizerName) {
+		t.Errorf("Workspace finalizers = %v, want %q", got.Finalizers, containerFinalizerName)
+	}
+}
+
+func TestReconcileCreatesMissingInstanceAndUpdatesStatus(t *testing.T) {
+	provider := &FakeProvider{}
+	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
+
+	result, err := reconcileWorkspace(t, reconciler)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.RequeueAfter != 10*time.Second {
+		t.Errorf("RequeueAfter = %s, want 10s for creating instance", result.RequeueAfter)
+	}
+	if len(provider.Created) != 1 {
+		t.Fatalf("Create() called %d times, want 1", len(provider.Created))
+	}
+	if got, want := provider.Created[0], (compute.CreateRequest{
+		UID:   string(testUID),
+		Owner: "owner@example.com",
+		Image: "example/image:latest",
+		Port:  8080,
+	}); got != want {
+		t.Errorf("Create() request = %+v, want %+v", got, want)
+	}
+
+	var got workspacesv1alpha1.Workspace
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: "test-workspace", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get Workspace after reconcile: %v", err)
+	}
+	wantStatus := workspacesv1alpha1.WorkspaceStatus{
+		Phase:       workspacesv1alpha1.PhaseCreating,
+		ContainerID: "container-" + string(testUID),
+		Message:     "containercreating",
+	}
+	if got.Status != wantStatus {
+		t.Errorf("Workspace status = %+v, want %+v", got.Status, wantStatus)
+	}
+}
+
+func TestReconcileKeepsRunningInstance(t *testing.T) {
+	provider := &FakeProvider{
+		Instances: map[string]*compute.Instance{
+			string(testUID): {
+				ID:    "container-running",
+				UID:   string(testUID),
+				State: "running",
+				IP:    "10.0.0.4",
+				URL:   "http://workspace.example.com",
+			},
+		},
+	}
+	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
+
+	result, err := reconcileWorkspace(t, reconciler)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.RequeueAfter != time.Minute {
+		t.Errorf("RequeueAfter = %s, want 1m for running instance", result.RequeueAfter)
+	}
+	if len(provider.Created) != 0 {
+		t.Errorf("Create() called %d times for running instance, want 0", len(provider.Created))
+	}
+
+	var got workspacesv1alpha1.Workspace
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: "test-workspace", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get Workspace after reconcile: %v", err)
+	}
+	wantStatus := workspacesv1alpha1.WorkspaceStatus{
+		Phase:       workspacesv1alpha1.PhaseRunning,
+		ContainerID: "container-running",
+		IP:          "10.0.0.4",
+		URL:         "http://workspace.example.com",
+		Message:     "containerrunning",
+	}
+	if got.Status != wantStatus {
+		t.Errorf("Workspace status = %+v, want %+v", got.Status, wantStatus)
+	}
+}
+
+func TestReconcileRecreatesStoppedInstance(t *testing.T) {
+	provider := &FakeProvider{
+		Instances: map[string]*compute.Instance{
+			string(testUID): {ID: "container-stopped", State: "exited"},
+		},
+	}
+	reconciler, _ := newTestReconciler(t, testWorkspace(true), provider)
+
+	_, err := reconcileWorkspace(t, reconciler)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(provider.Created) != 1 {
+		t.Errorf("Create() called %d times for stopped instance, want 1", len(provider.Created))
+	}
+}
+
+func TestReconcileReturnsProviderErrors(t *testing.T) {
+	getErr := errors.New("provider lookup failed")
+	createErr := errors.New("provider create failed")
+
+	for _, tt := range []struct {
+		name     string
+		provider *FakeProvider
+	}{
+		{name: "get error", provider: &FakeProvider{GetErr: getErr}},
+		{name: "create error", provider: &FakeProvider{CreateErr: createErr}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reconciler, _ := newTestReconciler(t, testWorkspace(true), tt.provider)
+			_, err := reconcileWorkspace(t, reconciler)
+			if err == nil {
+				t.Fatal("Reconcile() error = nil, want provider error")
+			}
+			if tt.name == "get error" && !errors.Is(err, getErr) {
+				t.Errorf("Reconcile() error = %v, want %v", err, getErr)
+			}
+			if tt.name == "create error" && !errors.Is(err, createErr) {
+				t.Errorf("Reconcile() error = %v, want %v", err, createErr)
+			}
+		})
+	}
+}
+
+func TestReconcileDeletesInstanceAndRemovesFinalizer(t *testing.T) {
+	provider := &FakeProvider{}
+	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
+	key := types.NamespacedName{Name: "test-workspace", Namespace: "default"}
+
+	var workspace workspacesv1alpha1.Workspace
+	if err := k8sClient.Get(context.Background(), key, &workspace); err != nil {
+		t.Fatalf("get Workspace: %v", err)
+	}
+	if err := k8sClient.Delete(context.Background(), &workspace); err != nil {
+		t.Fatalf("delete Workspace: %v", err)
+	}
+
+	_, err := reconcileWorkspace(t, reconciler)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(provider.Deleted) != 1 || provider.Deleted[0] != string(testUID) {
+		t.Errorf("Delete() calls = %v, want [%q]", provider.Deleted, testUID)
+	}
+	err = k8sClient.Get(context.Background(), key, &workspace)
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("get Workspace after deletion: %v", err)
+	}
+	if err == nil {
+		if containsFinalizer(workspace.Finalizers, containerFinalizerName) {
+			t.Errorf("Workspace finalizer %q remains after deletion", containerFinalizerName)
+		}
+	}
+}
+
+func TestReconcileDoesNotRemoveFinalizerWhenDeleteFails(t *testing.T) {
+	deleteErr := errors.New("provider delete failed")
+	provider := &FakeProvider{DeleteErr: deleteErr}
+	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
+	key := types.NamespacedName{Name: "test-workspace", Namespace: "default"}
+
+	var workspace workspacesv1alpha1.Workspace
+	if err := k8sClient.Get(context.Background(), key, &workspace); err != nil {
+		t.Fatalf("get Workspace: %v", err)
+	}
+	if err := k8sClient.Delete(context.Background(), &workspace); err != nil {
+		t.Fatalf("delete Workspace: %v", err)
+	}
+
+	_, err := reconcileWorkspace(t, reconciler)
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("Reconcile() error = %v, want %v", err, deleteErr)
+	}
+
+	if err := k8sClient.Get(context.Background(), key, &workspace); err != nil {
+		t.Fatalf("get Workspace after failed provider deletion: %v", err)
+	}
+	if !containsFinalizer(workspace.Finalizers, containerFinalizerName) {
+		t.Errorf("Workspace finalizers = %v, want deletion finalizer retained", workspace.Finalizers)
+	}
+}
+
+func containsFinalizer(finalizers []string, name string) bool {
+	for _, finalizer := range finalizers {
+		if finalizer == name {
+			return true
+		}
+	}
+	return false
+}
