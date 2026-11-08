@@ -114,7 +114,9 @@ func (p *DockerProvider) Create(ctx context.Context, req CreateRequest) (*Instan
 	_, err = p.client.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{
-			Image: req.Image,
+			Image:        req.Image,
+			Cmd:          req.Args,
+			ExposedPorts: network.PortSet{port: {}},
 			Labels: map[string]string{
 				LabelManagedBy: managedValue,
 				LabeUID:        req.UID,

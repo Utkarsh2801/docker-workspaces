@@ -25,6 +25,7 @@ type CreateRequest struct {
 	Owner string
 	Image string
 	Port  int
+	Args  []string
 }
 
 type Provider interface {

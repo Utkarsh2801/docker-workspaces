@@ -1,0 +1,9 @@
+apiVersion: workspaces.example.com/v1alpha1
+kind: Workspace
+metadata:
+  name: ide
+spec:
+  owner: alice@example.com
+  image: codercom/code-server:4.145.2
+  port: 8080
+  args: ["--auth", "none"]

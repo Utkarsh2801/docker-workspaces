@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pomerium
+  namespace: pomerium
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: pomerium
+          ports:
+            - name: http
+              containerPort: 8080
+              hostPort: 80
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              hostPort: 443
+              protocol: TCP

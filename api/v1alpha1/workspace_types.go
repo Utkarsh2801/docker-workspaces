@@ -41,6 +41,9 @@ type WorkspaceSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	Port int32 `json:"port,omitempty"`
+
+	// +optional
+	Args []string `json:"args,omitempty"`
 }
 
 // WorkspaceStatus defines the observed state of Workspace.
@@ -78,6 +81,7 @@ const (
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.ip`
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.status.url`
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$')",message="name must be 1 to 63 characters, start with a lowercase letter, and contain only lowercase letters, digits, or hyphens; it must end with a lowercase letter or digit"
 type Workspace struct {
 	metav1.TypeMeta `json:",inline"`
 

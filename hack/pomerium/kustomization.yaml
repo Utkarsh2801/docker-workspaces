@@ -1,0 +1,4 @@
+resources:
+  - github.com/pomerium/ingress-controller/config/default?ref=v0.34.0
+patches:
+  - path: hostports.yaml

@@ -8,6 +8,8 @@ import (
 
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
 	"github.com/utkarsh2801/docker-workspaces/internal/compute"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,6 +27,12 @@ func newTestReconciler(t *testing.T, workspace *workspacesv1alpha1.Workspace, pr
 	scheme := runtime.NewScheme()
 	if err := workspacesv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add Workspace API to scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core API to scheme: %v", err)
+	}
+	if err := networkingv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add networking API to scheme: %v", err)
 	}
 
 	builder := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&workspacesv1alpha1.Workspace{})
@@ -109,7 +117,8 @@ func TestReconcileAddsFinalizerBeforeProvisioning(t *testing.T) {
 
 func TestReconcileCreatesMissingInstanceAndUpdatesStatus(t *testing.T) {
 	provider := &FakeProvider{}
-	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
+	workspace := testWorkspace(true)
+	reconciler, k8sClient := newTestReconciler(t, workspace, provider)
 
 	result, err := reconcileWorkspace(t, reconciler)
 	if err != nil {
@@ -121,13 +130,14 @@ func TestReconcileCreatesMissingInstanceAndUpdatesStatus(t *testing.T) {
 	if len(provider.Created) != 1 {
 		t.Fatalf("Create() called %d times, want 1", len(provider.Created))
 	}
-	if got, want := provider.Created[0], (compute.CreateRequest{
-		UID:   string(testUID),
-		Owner: "owner@example.com",
-		Image: "example/image:latest",
-		Port:  8080,
-	}); got != want {
-		t.Errorf("Create() request = %+v, want %+v", got, want)
+	gotRequest := provider.Created[0]
+	if gotRequest.UID != string(testUID) ||
+		gotRequest.Owner != "owner@example.com" ||
+		gotRequest.Image != "example/image:latest" ||
+		gotRequest.Port != 8080 ||
+		len(gotRequest.Args) != 0 {
+		t.Errorf("Create() request = %+v, want UID %q, owner %q, image %q, port %d, no args",
+			gotRequest, testUID, "owner@example.com", "example/image:latest", 8080)
 	}
 
 	var got workspacesv1alpha1.Workspace
@@ -156,7 +166,8 @@ func TestReconcileKeepsRunningInstance(t *testing.T) {
 			},
 		},
 	}
-	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
+	workspace := testWorkspace(true)
+	reconciler, k8sClient := newTestReconciler(t, workspace, provider)
 
 	result, err := reconcileWorkspace(t, reconciler)
 	if err != nil {
@@ -177,11 +188,20 @@ func TestReconcileKeepsRunningInstance(t *testing.T) {
 		Phase:       workspacesv1alpha1.PhaseRunning,
 		ContainerID: "container-running",
 		IP:          "10.0.0.4",
-		URL:         "http://workspace.example.com",
+		URL:         routeURL(workspace),
 		Message:     "containerrunning",
 	}
 	if got.Status != wantStatus {
 		t.Errorf("Workspace status = %+v, want %+v", got.Status, wantStatus)
+	}
+	for _, resource := range []client.Object{
+		&corev1.Service{},
+		&corev1.Endpoints{},
+		&networkingv1.Ingress{},
+	} {
+		if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}, resource); err != nil {
+			t.Errorf("get reconciled %T: %v", resource, err)
+		}
 	}
 }
 

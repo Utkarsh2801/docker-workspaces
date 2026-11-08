@@ -21,6 +21,8 @@ import (
 	"errors"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,6 +45,8 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;endpoints,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -88,11 +92,24 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			Owner: ws.Spec.Owner,
 			Image: ws.Spec.Image,
 			Port:  int(ws.Spec.Port),
+			Args:  ws.Spec.Args,
 		})
 	}
 
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if inst.IP != "" {
+		if err := r.ensureRouting(ctx, &ws, inst.IP); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	if inst.State == "running" && inst.IP != "" {
+		if err := r.ensureRouting(ctx, &ws, inst.IP); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	want := workspacesv1alpha1.WorkspaceStatus{
@@ -105,6 +122,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	if inst.State == "running" {
 		want.Phase = workspacesv1alpha1.PhaseRunning
+		if inst.IP != "" {
+			want.URL = routeURL(&ws)
+		}
 	}
 
 	if ws.Status != want {
@@ -125,6 +145,9 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacesv1alpha1.Workspace{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.Endpoints{}).
+		Owns(&networkingv1.Ingress{}).
 		Named("workspace").
 		Complete(r)
 }

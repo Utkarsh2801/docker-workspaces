@@ -54,6 +54,10 @@ spec:
           spec:
             description: spec defines the desired state of Workspace
             properties:
+              args:
+                items:
+                  type: string
+                type: array
               image:
                 description: Image is the Docker image to use for the workspace.
                 type: string
@@ -89,6 +93,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: name must be 1 to 63 characters, start with a lowercase letter,
+            and contain only lowercase letters, digits, or hyphens; it must end with
+            a lowercase letter or digit
+          rule: self.metadata.name.matches('^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$')
     served: true
     storage: true
     subresources:
