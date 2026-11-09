@@ -49,7 +49,7 @@ var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
 	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
+	// allow the Docker socket hostPath required by the controller, installing CRDs,
 	// and deploying the controller.
 	BeforeAll(func() {
 		By("creating manager namespace")
@@ -57,11 +57,11 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
-		By("labeling the namespace to enforce the restricted security policy")
+		By("allowing the Docker socket hostPath in the manager namespace")
 		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
+			"pod-security.kubernetes.io/enforce=privileged")
 		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+		Expect(err).NotTo(HaveOccurred(), "Failed to allow the Docker socket hostPath")
 
 		By("installing CRDs")
 		cmd = exec.Command("make", "install")
