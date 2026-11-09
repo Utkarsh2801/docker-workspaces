@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -96,14 +97,25 @@ func setupCertManager() {
 	By("checking if CertManager is already installed")
 	if utils.IsCertManagerCRDsInstalled() {
 		_, _ = fmt.Fprintf(GinkgoWriter, "CertManager is already installed. Skipping installation.\n")
-		return
+	} else {
+		// Mark for cleanup before installation to handle interruptions and partial installs.
+		shouldCleanupCertManager = true
+
+		By("installing CertManager")
+		Expect(utils.InstallCertManager()).To(Succeed(), "Failed to install CertManager")
 	}
 
-	// Mark for cleanup before installation to handle interruptions and partial installs.
-	shouldCleanupCertManager = true
-
-	By("installing CertManager")
-	Expect(utils.InstallCertManager()).To(Succeed(), "Failed to install CertManager")
+	By("waiting for CertManager webhook CA injection")
+	verifyCAInjection := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get",
+			"validatingwebhookconfigurations.admissionregistration.k8s.io",
+			"cert-manager-webhook",
+			"-o", "jsonpath={.webhooks[0].clientConfig.caBundle}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).NotTo(BeEmpty(), "CertManager webhook CA bundle not yet injected")
+	}
+	Eventually(verifyCAInjection, 3*time.Minute, time.Second).Should(Succeed())
 }
 
 // teardownCertManager uninstalls CertManager if it was installed by setupCertManager.
