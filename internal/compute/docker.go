@@ -51,8 +51,16 @@ func (p *DockerProvider) pull(ctx context.Context, image string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Close()
-	return resp.Wait(ctx)
+	if err := resp.Wait(ctx); err != nil {
+		if closeErr := resp.Close(); closeErr != nil {
+			return fmt.Errorf("wait for image pull: %w (close response: %v)", err, closeErr)
+		}
+		return err
+	}
+	if err := resp.Close(); err != nil {
+		return fmt.Errorf("close image pull response: %w", err)
+	}
+	return nil
 }
 
 func (p *DockerProvider) Get(ctx context.Context, uid string) (*Instance, error) {
@@ -156,13 +164,13 @@ func (p *DockerProvider) List(ctx context.Context) ([]*Instance, error) {
 		return nil, err
 	}
 	out := make([]*Instance, 0, len(res.Items))
-	for _, container := range res.Items {
+	for _, listedContainer := range res.Items {
 		// Convert each container to an Instance
 		inst := &Instance{
-			ID:        container.ID,
-			UID:       container.Labels[LabeUID],
-			State:     string(container.State),
-			CreatedAt: time.Unix(container.Created, 0),
+			ID:        listedContainer.ID,
+			UID:       listedContainer.Labels[LabeUID],
+			State:     string(listedContainer.State),
+			CreatedAt: time.Unix(listedContainer.Created, 0),
 		}
 		out = append(out, inst)
 	}

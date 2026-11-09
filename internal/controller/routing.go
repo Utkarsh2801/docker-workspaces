@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -59,25 +61,37 @@ func (r *WorkspaceReconciler) ensureService(ctx context.Context, ws *workspacesv
 }
 
 func (r *WorkspaceReconciler) ensureEndpoints(ctx context.Context, ws *workspacesv1alpha1.Workspace, ip string) error {
-	if net.ParseIP(ip) == nil {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
 		return fmt.Errorf("workspace %s/%s has invalid endpoint IP %q", ws.Namespace, ws.Name, ip)
 	}
 
-	endpoints := &corev1.Endpoints{}
-	endpoints.Name = ws.Name
-	endpoints.Namespace = ws.Namespace
+	endpointSlice := &discoveryv1.EndpointSlice{}
+	endpointSlice.Name = ws.Name
+	endpointSlice.Namespace = ws.Namespace
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, endpoints, func() error {
-		endpoints.Labels = mergeLabels(endpoints.Labels, ws.Labels)
-		endpoints.Subsets = []corev1.EndpointSubset{{
-			Addresses: []corev1.EndpointAddress{{IP: ip}},
-			Ports: []corev1.EndpointPort{{
-				Name:     routePortName,
-				Port:     ws.Spec.Port,
-				Protocol: corev1.ProtocolTCP,
-			}},
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, endpointSlice, func() error {
+		endpointSlice.Labels = mergeLabels(endpointSlice.Labels, ws.Labels)
+		endpointSlice.Labels[discoveryv1.LabelServiceName] = ws.Name
+		addressType := discoveryv1.AddressTypeIPv6
+		if parsedIP.To4() != nil {
+			addressType = discoveryv1.AddressTypeIPv4
+		}
+		endpointSlice.AddressType = addressType
+		portName := routePortName
+		port := ws.Spec.Port
+		protocol := corev1.ProtocolTCP
+		ready := true
+		endpointSlice.Endpoints = []discoveryv1.Endpoint{{
+			Addresses:  []string{ip},
+			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
 		}}
-		return controllerutil.SetControllerReference(ws, endpoints, r.Scheme)
+		endpointSlice.Ports = []discoveryv1.EndpointPort{{
+			Name:     &portName,
+			Port:     &port,
+			Protocol: &protocol,
+		}}
+		return controllerutil.SetControllerReference(ws, endpointSlice, r.Scheme)
 	})
 	return err
 }
@@ -152,8 +166,6 @@ func mergeLabels(existing, additions map[string]string) map[string]string {
 	if existing == nil {
 		existing = make(map[string]string, len(additions))
 	}
-	for key, value := range additions {
-		existing[key] = value
-	}
+	maps.Copy(existing, additions)
 	return existing
 }

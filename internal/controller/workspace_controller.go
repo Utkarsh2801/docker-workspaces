@@ -22,6 +22,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -46,7 +47,8 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces/finalizers,verbs=update
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services;endpoints,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -85,7 +87,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	inst, err := r.Compute.Get(ctx, uid)
-	if errors.Is(err, compute.ErrNotFound) || (err == nil && inst.State != "running") {
+	if errors.Is(err, compute.ErrNotFound) || (err == nil && inst.State != compute.StateRunning) {
 		logf.Log.Info("Creating workspace", "uid", uid)
 		inst, err = r.Compute.Create(ctx, compute.CreateRequest{
 			UID:   uid,
@@ -106,7 +108,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
-	if inst.State == "running" && inst.IP != "" {
+	if inst.State == compute.StateRunning && inst.IP != "" {
 		if err := r.ensureRouting(ctx, &ws, inst.IP); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -120,7 +122,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		Message:     "container" + inst.State,
 	}
 
-	if inst.State == "running" {
+	if inst.State == compute.StateRunning {
 		want.Phase = workspacesv1alpha1.PhaseRunning
 		if inst.IP != "" {
 			want.URL = routeURL(&ws)
@@ -146,7 +148,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacesv1alpha1.Workspace{}).
 		Owns(&corev1.Service{}).
-		Owns(&corev1.Endpoints{}).
+		Owns(&discoveryv1.EndpointSlice{}).
 		Owns(&networkingv1.Ingress{}).
 		Named("workspace").
 		Complete(r)

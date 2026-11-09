@@ -17,7 +17,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-const dashboardOrigin = "https://workspaces.localhost.pomerium.io"
+const (
+	dashboardOrigin    = "https://workspaces.localhost.pomerium.io"
+	testAliceEmail     = "alice@example.com"
+	testAliceWorkspace = "alice-workspace"
+	jsonContentType    = "application/json"
+)
 
 func newTestServer(t *testing.T, objects ...client.Object) (*Server, client.Client) {
 	t.Helper()
@@ -79,8 +84,8 @@ func TestWorkspaceAPIRequiresPomeriumIdentity(t *testing.T) {
 func TestListWorkspacesOnlyReturnsAuthenticatedOwner(t *testing.T) {
 	server, _ := newTestServer(t,
 		&workspacesv1alpha1.Workspace{
-			ObjectMeta: metav1.ObjectMeta{Name: "alice-workspace", Namespace: Namespace},
-			Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: "alice@example.com"},
+			ObjectMeta: metav1.ObjectMeta{Name: testAliceWorkspace, Namespace: Namespace},
+			Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: testAliceEmail},
 			Status:     workspacesv1alpha1.WorkspaceStatus{Phase: workspacesv1alpha1.PhaseRunning, URL: "https://alice-workspace.localhost.pomerium.io"},
 		},
 		&workspacesv1alpha1.Workspace{
@@ -89,7 +94,7 @@ func TestListWorkspacesOnlyReturnsAuthenticatedOwner(t *testing.T) {
 		},
 		&workspacesv1alpha1.Workspace{
 			ObjectMeta: metav1.ObjectMeta{Name: "other-namespace", Namespace: "other"},
-			Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: "alice@example.com"},
+			Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: testAliceEmail},
 		},
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/workspaces", nil)
@@ -104,7 +109,7 @@ func TestListWorkspacesOnlyReturnsAuthenticatedOwner(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode workspace list: %v", err)
 	}
-	if len(got) != 1 || got[0].Name != "alice-workspace" || got[0].URL != "https://alice-workspace.localhost.pomerium.io" {
+	if len(got) != 1 || got[0].Name != testAliceWorkspace || got[0].URL != "https://alice-workspace.localhost.pomerium.io" {
 		t.Errorf("workspace list = %+v, want only Alice's default-namespace Workspace", got)
 	}
 }
@@ -114,7 +119,7 @@ func TestCreateWorkspaceUsesAuthenticatedOwner(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/workspaces", bytes.NewBufferString(`{"name":"my-workspace","image":"codercom/code-server"}`))
 	request.Header.Set(IdentityEmailHeader, "Alice@Example.com")
 	request.Header.Set("Origin", dashboardOrigin)
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", jsonContentType)
 	response := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(response, request)
@@ -126,7 +131,7 @@ func TestCreateWorkspaceUsesAuthenticatedOwner(t *testing.T) {
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-workspace", Namespace: Namespace}, &got); err != nil {
 		t.Fatalf("get created Workspace: %v", err)
 	}
-	if got.Spec.Owner != "alice@example.com" {
+	if got.Spec.Owner != testAliceEmail {
 		t.Errorf("Workspace owner = %q, want authenticated identity", got.Spec.Owner)
 	}
 	if got.Spec.Image != "codercom/code-server" || got.Spec.Port != 8080 {
@@ -140,9 +145,9 @@ func TestCreateWorkspaceUsesAuthenticatedOwner(t *testing.T) {
 func TestCreateWorkspaceDefaultsToCodeServer(t *testing.T) {
 	server, k8sClient := newTestServer(t)
 	request := httptest.NewRequest(http.MethodPost, "/api/workspaces", bytes.NewBufferString(`{"name":"default-image"}`))
-	request.Header.Set(IdentityEmailHeader, "alice@example.com")
+	request.Header.Set(IdentityEmailHeader, testAliceEmail)
 	request.Header.Set("Origin", dashboardOrigin)
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", jsonContentType)
 	response := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(response, request)
@@ -171,17 +176,17 @@ func TestDeleteWorkspaceRequiresOwnerAndSameOrigin(t *testing.T) {
 	}{
 		{
 			name:   "owner can delete",
-			email:  "alice@example.com",
+			email:  testAliceEmail,
 			origin: dashboardOrigin,
 			workspace: &workspacesv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice-workspace", Namespace: Namespace},
-				Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: "alice@example.com"},
+				ObjectMeta: metav1.ObjectMeta{Name: testAliceWorkspace, Namespace: Namespace},
+				Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: testAliceEmail},
 			},
 			wantStatus: http.StatusAccepted,
 		},
 		{
 			name:   "another owner is hidden",
-			email:  "alice@example.com",
+			email:  testAliceEmail,
 			origin: dashboardOrigin,
 			workspace: &workspacesv1alpha1.Workspace{
 				ObjectMeta: metav1.ObjectMeta{Name: "bob-workspace", Namespace: Namespace},
@@ -191,17 +196,17 @@ func TestDeleteWorkspaceRequiresOwnerAndSameOrigin(t *testing.T) {
 		},
 		{
 			name:       "missing workspace",
-			email:      "alice@example.com",
+			email:      testAliceEmail,
 			origin:     dashboardOrigin,
 			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:   "foreign origin",
-			email:  "alice@example.com",
+			email:  testAliceEmail,
 			origin: "https://attacker.example",
 			workspace: &workspacesv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: "alice-workspace", Namespace: Namespace},
-				Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: "alice@example.com"},
+				ObjectMeta: metav1.ObjectMeta{Name: testAliceWorkspace, Namespace: Namespace},
+				Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: testAliceEmail},
 			},
 			wantStatus: http.StatusForbidden,
 		},
@@ -247,18 +252,18 @@ func TestCreateWorkspaceRejectsInvalidRequests(t *testing.T) {
 		contentType string
 		wantStatus  int
 	}{
-		{name: "invalid workspace name", body: `{"name":"Not Valid"}`, origin: dashboardOrigin, contentType: "application/json", wantStatus: http.StatusBadRequest},
-		{name: "unapproved image", body: `{"name":"mine","image":"nginx"}`, origin: dashboardOrigin, contentType: "application/json", wantStatus: http.StatusBadRequest},
-		{name: "foreign origin", body: `{"name":"mine"}`, origin: "https://attacker.example", contentType: "application/json", wantStatus: http.StatusForbidden},
+		{name: "invalid workspace name", body: `{"name":"Not Valid"}`, origin: dashboardOrigin, contentType: jsonContentType, wantStatus: http.StatusBadRequest},
+		{name: "unapproved image", body: `{"name":"mine","image":"nginx"}`, origin: dashboardOrigin, contentType: jsonContentType, wantStatus: http.StatusBadRequest},
+		{name: "foreign origin", body: `{"name":"mine"}`, origin: "https://attacker.example", contentType: jsonContentType, wantStatus: http.StatusForbidden},
 		{name: "wrong content type", body: `{"name":"mine"}`, origin: dashboardOrigin, contentType: "text/plain", wantStatus: http.StatusUnsupportedMediaType},
-		{name: "unknown request field", body: `{"name":"mine","owner":"bob@example.com"}`, origin: dashboardOrigin, contentType: "application/json", wantStatus: http.StatusBadRequest},
+		{name: "unknown request field", body: `{"name":"mine","owner":"bob@example.com"}`, origin: dashboardOrigin, contentType: jsonContentType, wantStatus: http.StatusBadRequest},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, k8sClient := newTestServer(t)
 			request := httptest.NewRequest(http.MethodPost, "/api/workspaces", bytes.NewBufferString(tt.body))
-			request.Header.Set(IdentityEmailHeader, "alice@example.com")
+			request.Header.Set(IdentityEmailHeader, testAliceEmail)
 			request.Header.Set("Origin", tt.origin)
 			request.Header.Set("Content-Type", tt.contentType)
 			response := httptest.NewRecorder()
@@ -282,13 +287,13 @@ func TestCreateWorkspaceRejectsInvalidRequests(t *testing.T) {
 func TestCreateWorkspaceReportsNameConflict(t *testing.T) {
 	existing := &workspacesv1alpha1.Workspace{
 		ObjectMeta: metav1.ObjectMeta{Name: "mine", Namespace: Namespace},
-		Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: "alice@example.com"},
+		Spec:       workspacesv1alpha1.WorkspaceSpec{Owner: testAliceEmail},
 	}
 	server, _ := newTestServer(t, existing)
 	request := httptest.NewRequest(http.MethodPost, "/api/workspaces", bytes.NewBufferString(`{"name":"mine"}`))
-	request.Header.Set(IdentityEmailHeader, "alice@example.com")
+	request.Header.Set(IdentityEmailHeader, testAliceEmail)
 	request.Header.Set("Origin", dashboardOrigin)
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", jsonContentType)
 	response := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(response, request)

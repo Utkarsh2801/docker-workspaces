@@ -11,6 +11,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
+const (
+	testCodeServerLatest = "codercom/code-server:latest"
+	testOwnerEmail       = "owner@example.com"
+)
+
 func TestWorkspaceDefaulterDefault(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -29,10 +34,10 @@ func TestWorkspaceDefaulterDefault(t *testing.T) {
 		},
 		{
 			name:       "preserves explicit image and existing labels",
-			image:      "codercom/code-server:latest",
-			owner:      "owner@example.com",
+			image:      testCodeServerLatest,
+			owner:      testOwnerEmail,
 			labels:     map[string]string{"team": "platform"},
-			wantImage:  "codercom/code-server:latest",
+			wantImage:  testCodeServerLatest,
 			wantOwner:  "owner_at_example.com",
 			wantLabels: map[string]string{"team": "platform"},
 		},
@@ -95,10 +100,10 @@ func TestWorkspaceValidatorValidateCreate(t *testing.T) {
 		image   string
 		wantErr bool
 	}{
-		{name: "traefik repository", image: "traefik/whoami"},
+		{name: "traefik repository", image: defaultWorkspaceImage},
 		{name: "traefik tagged image", image: "traefik/whoami:v1.10.2"},
 		{name: "code-server repository", image: "codercom/code-server"},
-		{name: "code-server tagged image", image: "codercom/code-server:latest"},
+		{name: "code-server tagged image", image: testCodeServerLatest},
 		{name: "empty image", image: "", wantErr: true},
 		{name: "unapproved repository", image: "nginx:latest", wantErr: true},
 		{name: "invalid image reference", image: "not an image", wantErr: true},
@@ -129,21 +134,21 @@ func TestWorkspaceValidatorValidateUpdate(t *testing.T) {
 	}{
 		{
 			name:     "same owner and approved image",
-			oldOwner: "owner@example.com",
-			newOwner: "owner@example.com",
+			oldOwner: testOwnerEmail,
+			newOwner: testOwnerEmail,
 			newImage: "traefik/whoami:v1.10.2",
 		},
 		{
 			name:     "owner cannot change",
-			oldOwner: "owner@example.com",
+			oldOwner: testOwnerEmail,
 			newOwner: "other@example.com",
-			newImage: "traefik/whoami",
+			newImage: defaultWorkspaceImage,
 			wantErr:  true,
 		},
 		{
 			name:     "updated image must be approved",
-			oldOwner: "owner@example.com",
-			newOwner: "owner@example.com",
+			oldOwner: testOwnerEmail,
+			newOwner: testOwnerEmail,
 			newImage: "nginx:latest",
 			wantErr:  true,
 		},
@@ -154,7 +159,7 @@ func TestWorkspaceValidatorValidateUpdate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			oldWorkspace := &workspacesv1alpha1.Workspace{Spec: workspacesv1alpha1.WorkspaceSpec{
 				Owner: tt.oldOwner,
-				Image: "traefik/whoami",
+				Image: defaultWorkspaceImage,
 			}}
 			newWorkspace := &workspacesv1alpha1.Workspace{Spec: workspacesv1alpha1.WorkspaceSpec{
 				Owner: tt.newOwner,

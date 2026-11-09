@@ -8,6 +8,8 @@ import (
 
 var ErrNotFound = errors.New("instance not found")
 
+const StateRunning = "running"
+
 // contains information about a machine instance.
 type Instance struct {
 	ID        string

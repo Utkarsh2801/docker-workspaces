@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,7 +25,13 @@ func TestEnsureRoutingCreatesServiceEndpointsAndIngress(t *testing.T) {
 	}
 
 	key := types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}
+	assertWorkspaceService(t, k8sClient, key, workspace)
+	assertWorkspaceEndpointSlice(t, k8sClient, key, workspace, "10.10.0.4")
+	assertWorkspaceIngress(t, k8sClient, key, workspace)
+}
 
+func assertWorkspaceService(t *testing.T, k8sClient client.Client, key types.NamespacedName, workspace *workspacesv1alpha1.Workspace) {
+	t.Helper()
 	var service corev1.Service
 	if err := k8sClient.Get(context.Background(), key, &service); err != nil {
 		t.Fatalf("get Service: %v", err)
@@ -40,18 +48,33 @@ func TestEnsureRoutingCreatesServiceEndpointsAndIngress(t *testing.T) {
 	if service.Labels["workspaces.example.com/owner"] != "owner_at_example.com" {
 		t.Errorf("Service labels = %v, owner label was not propagated", service.Labels)
 	}
+}
 
-	var endpoints corev1.Endpoints
-	if err := k8sClient.Get(context.Background(), key, &endpoints); err != nil {
-		t.Fatalf("get Endpoints: %v", err)
+func assertWorkspaceEndpointSlice(t *testing.T, k8sClient client.Client, key types.NamespacedName, workspace *workspacesv1alpha1.Workspace, ip string) {
+	t.Helper()
+	var endpointSlice discoveryv1.EndpointSlice
+	if err := k8sClient.Get(context.Background(), key, &endpointSlice); err != nil {
+		t.Fatalf("get EndpointSlice: %v", err)
 	}
-	if len(endpoints.Subsets) != 1 || len(endpoints.Subsets[0].Addresses) != 1 || len(endpoints.Subsets[0].Ports) != 1 {
-		t.Fatalf("Endpoints subsets = %+v, want one subset with one address", endpoints.Subsets)
+	if endpointSlice.AddressType != discoveryv1.AddressTypeIPv4 ||
+		len(endpointSlice.Endpoints) != 1 ||
+		len(endpointSlice.Endpoints[0].Addresses) != 1 ||
+		len(endpointSlice.Ports) != 1 {
+		t.Fatalf("EndpointSlice = %+v, want one IPv4 endpoint and one port", endpointSlice)
 	}
-	if got := endpoints.Subsets[0]; got.Addresses[0].IP != "10.10.0.4" || got.Ports[0].Name != routePortName || got.Ports[0].Port != workspace.Spec.Port {
-		t.Errorf("Endpoints subset = %+v, want IP 10.10.0.4 and port %d named %q", got, workspace.Spec.Port, routePortName)
+	if got := endpointSlice.Endpoints[0]; got.Addresses[0] != ip || got.Conditions.Ready == nil || !*got.Conditions.Ready {
+		t.Errorf("EndpointSlice endpoint = %+v, want ready endpoint at %s", got, ip)
 	}
+	if got := endpointSlice.Ports[0]; got.Name == nil || *got.Name != routePortName || got.Port == nil || *got.Port != workspace.Spec.Port {
+		t.Errorf("EndpointSlice port = %+v, want %q port %d", got, routePortName, workspace.Spec.Port)
+	}
+	if endpointSlice.Labels[discoveryv1.LabelServiceName] != workspace.Name {
+		t.Errorf("EndpointSlice service label = %q, want %q", endpointSlice.Labels[discoveryv1.LabelServiceName], workspace.Name)
+	}
+}
 
+func assertWorkspaceIngress(t *testing.T, k8sClient client.Client, key types.NamespacedName, workspace *workspacesv1alpha1.Workspace) {
+	t.Helper()
 	var ingress networkingv1.Ingress
 	if err := k8sClient.Get(context.Background(), key, &ingress); err != nil {
 		t.Fatalf("get Ingress: %v", err)
@@ -179,11 +202,11 @@ func TestEnsureRoutingUpdatesExistingResources(t *testing.T) {
 		t.Errorf("existing Service label was not preserved: %v", service.Labels)
 	}
 
-	var endpoints corev1.Endpoints
-	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(workspace), &endpoints); err != nil {
-		t.Fatalf("get updated Endpoints: %v", err)
+	var endpointSlice discoveryv1.EndpointSlice
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(workspace), &endpointSlice); err != nil {
+		t.Fatalf("get updated EndpointSlice: %v", err)
 	}
-	if got := endpoints.Subsets[0].Addresses[0].IP; got != "10.10.0.5" {
+	if got := endpointSlice.Endpoints[0].Addresses[0]; got != "10.10.0.5" {
 		t.Errorf("endpoint IP = %q, want updated IP 10.10.0.5", got)
 	}
 

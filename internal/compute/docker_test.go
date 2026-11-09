@@ -16,6 +16,13 @@ import (
 
 type dockerHandler func(http.ResponseWriter, *http.Request)
 
+const (
+	testUID             = "uid-1"
+	testImage           = "test-image"
+	testContainerName   = "workspace-uid-1"
+	testImageInspectURL = "/images/test-image/json"
+)
+
 func newTestDockerProvider(t *testing.T, handler dockerHandler) (*DockerProvider, func()) {
 	t.Helper()
 
@@ -57,7 +64,11 @@ func TestNewDockerProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDockerProvider() error = %v", err)
 	}
-	defer provider.client.Close()
+	defer func() {
+		if err := provider.client.Close(); err != nil {
+			t.Errorf("close Docker client: %v", err)
+		}
+	}()
 
 	if provider.client == nil {
 		t.Fatal("NewDockerProvider() returned a nil client")
@@ -85,7 +96,7 @@ func TestDockerProviderPull(t *testing.T) {
 			pullCalled := false
 			provider, cleanup := newTestDockerProvider(t, func(w http.ResponseWriter, r *http.Request) {
 				switch {
-				case r.Method == http.MethodGet && r.URL.Path == "/images/test-image/json":
+				case r.Method == http.MethodGet && r.URL.Path == testImageInspectURL:
 					status := tt.imageStatus
 					if status == 0 {
 						status = http.StatusOK
@@ -108,7 +119,7 @@ func TestDockerProviderPull(t *testing.T) {
 			})
 			defer cleanup()
 
-			err := provider.pull(context.Background(), "test-image")
+			err := provider.pull(context.Background(), testImage)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("pull() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -136,7 +147,7 @@ func TestDockerProviderGet(t *testing.T) {
 		{
 			name:      "inspect populated instance",
 			body:      `{"Id":"container-id","Name":"/workspace-uid-1","Created":"` + created + `","State":{"Status":"running"},"NetworkSettings":{"Networks":{"kind":{"IPAddress":"10.10.0.4"}},"Ports":{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"49152"}]}}}`,
-			wantState: "running", wantIP: "10.10.0.4", wantURL: "127.0.0.1:49152", wantCreated: createdAt,
+			wantState: StateRunning, wantIP: "10.10.0.4", wantURL: "127.0.0.1:49152", wantCreated: createdAt,
 		},
 		{
 			name: "missing optional fields",
@@ -159,8 +170,8 @@ func TestDockerProviderGet(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			provider, cleanup := newTestDockerProvider(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != "/containers/workspace-uid-1/json" {
-					t.Errorf("request = %s %s, want GET /containers/workspace-uid-1/json", r.Method, r.URL.Path)
+				if r.Method != http.MethodGet || r.URL.Path != "/containers/"+testContainerName+"/json" {
+					t.Errorf("request = %s %s, want GET /containers/%s/json", r.Method, r.URL.Path, testContainerName)
 				}
 				status := tt.status
 				if status == 0 {
@@ -170,7 +181,7 @@ func TestDockerProviderGet(t *testing.T) {
 			})
 			defer cleanup()
 
-			got, err := provider.Get(context.Background(), "uid-1")
+			got, err := provider.Get(context.Background(), testUID)
 			if tt.wantErr != nil {
 				if err == nil {
 					t.Fatal("Get() error = nil, want an error")
@@ -187,7 +198,7 @@ func TestDockerProviderGet(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Get() error = %v", err)
 			}
-			if got.ID != "container-id" || got.Name != "workspace-uid-1" || got.UID != "uid-1" {
+			if got.ID != "container-id" || got.Name != testContainerName || got.UID != testUID {
 				t.Errorf("Get() identity = %#v", got)
 			}
 			if got.State != tt.wantState || got.IP != tt.wantIP || got.URL != tt.wantURL {
@@ -200,152 +211,170 @@ func TestDockerProviderGet(t *testing.T) {
 	}
 }
 
+type dockerCreateCase struct {
+	name        string
+	publish     bool
+	imageStatus int
+	pullStatus  int
+	createCode  int
+	startCode   int
+	wantErr     string
+}
+
+type dockerCreateObservation struct {
+	body         map[string]any
+	started      bool
+	inspectCalls int
+}
+
 func TestDockerProviderCreate(t *testing.T) {
-	tests := []struct {
-		name        string
-		publish     bool
-		imageStatus int
-		pullStatus  int
-		createCode  int
-		startCode   int
-		wantErr     string
-	}{
+	tests := []dockerCreateCase{
 		{name: "creates and publishes port", publish: true},
 		{name: "creates without publishing port", publish: false},
 		{name: "accepts existing container conflict", publish: true, createCode: http.StatusConflict},
 		{name: "create failure", publish: true, createCode: http.StatusInternalServerError, wantErr: "create container"},
 		{name: "start failure", publish: true, startCode: http.StatusInternalServerError, wantErr: "start container"},
-		{name: "image pull failure", publish: true, imageStatus: http.StatusNotFound, pullStatus: http.StatusInternalServerError, wantErr: "pull test-image"},
+		{name: "image pull failure", publish: true, imageStatus: http.StatusNotFound, pullStatus: http.StatusInternalServerError, wantErr: "pull " + testImage},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var createBody map[string]any
-			var started bool
-			inspectCalls := 0
-			provider, cleanup := newTestDockerProvider(t, func(w http.ResponseWriter, r *http.Request) {
-				switch {
-				case r.Method == http.MethodGet && r.URL.Path == "/images/test-image/json":
-					status := tt.imageStatus
-					if status == 0 {
-						status = http.StatusOK
-					}
-					writeDockerResponse(w, status, `{"message":"image lookup"}`)
-				case r.Method == http.MethodPost && r.URL.Path == "/images/create":
-					code := tt.pullStatus
-					if code == 0 {
-						code = http.StatusOK
-					}
-					writeDockerResponse(w, code, `{"status":"downloaded"}`)
-				case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
-					if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
-						t.Errorf("decode create body: %v", err)
-					}
-					if r.URL.Query().Get("name") != "workspace-uid-1" {
-						t.Errorf("create name = %q, want workspace-uid-1", r.URL.Query().Get("name"))
-					}
-					code := tt.createCode
-					if code == 0 {
-						code = http.StatusCreated
-					}
-					writeDockerResponse(w, code, `{"Id":"container-id"}`)
-				case r.Method == http.MethodPost && r.URL.Path == "/containers/workspace-uid-1/start":
-					started = true
-					code := tt.startCode
-					if code == 0 {
-						code = http.StatusNoContent
-					}
-					writeDockerResponse(w, code, "")
-				case r.Method == http.MethodGet && r.URL.Path == "/containers/workspace-uid-1/json":
-					inspectCalls++
-					writeDockerResponse(w, http.StatusOK, `{"Id":"container-id","Name":"/workspace-uid-1","State":{"Status":"running"}}`)
-				default:
-					t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL)
-					writeDockerResponse(w, http.StatusNotFound, `{"message":"unexpected request"}`)
-				}
-			})
-			defer cleanup()
-			provider.Publish = tt.publish
-
-			got, err := provider.Create(context.Background(), CreateRequest{
-				UID: "uid-1", Owner: "owner-1", Image: "test-image", Port: 8080,
-			})
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("Create() error = %v, want it to contain %q", err, tt.wantErr)
-				}
-				if inspectCalls != 0 {
-					t.Errorf("container inspected %d times after create failure, want 0", inspectCalls)
-				}
-				if tt.wantErr == "start container" && !started {
-					t.Error("container was not started")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Create() error = %v", err)
-			}
-			if got.ID != "container-id" || got.UID != "uid-1" || got.State != "running" {
-				t.Errorf("Create() instance = %#v", got)
-			}
-			if !started {
-				t.Error("container was not started")
-			}
-			if inspectCalls != 1 {
-				t.Errorf("container inspected %d times, want 1", inspectCalls)
-			}
-
-			if createBody["Image"] != "test-image" {
-				t.Errorf("create Image = %v, want test-image", createBody["Image"])
-			}
-			labels, ok := createBody["Labels"].(map[string]any)
-			if !ok {
-				t.Fatalf("create Labels = %#v, want object", createBody["Labels"])
-			}
-			for key, want := range map[string]string{
-				LabelManagedBy: managedValue, LabeUID: "uid-1", LabeOwner: "owner-1",
-			} {
-				if labels[key] != want {
-					t.Errorf("Config.Labels[%q] = %v, want %q", key, labels[key], want)
-				}
-			}
-			hostConfig, ok := createBody["HostConfig"].(map[string]any)
-			if !ok {
-				t.Fatalf("create HostConfig = %#v, want object", createBody["HostConfig"])
-			}
-			if hostConfig["NetworkMode"] != dockerNetwork {
-				t.Errorf("HostConfig.NetworkMode = %v, want %q", hostConfig["NetworkMode"], dockerNetwork)
-			}
-			portBindingsValue, hasPortBindings := hostConfig["PortBindings"]
-			if tt.publish && !hasPortBindings {
-				t.Fatal("HostConfig.PortBindings missing, want a published port binding")
-			}
-			if tt.publish {
-				bindings, ok := portBindingsValue.(map[string]any)
-				if !ok {
-					t.Fatalf("HostConfig.PortBindings = %#v, want object", portBindingsValue)
-				}
-				portBindings, ok := bindings["8080/tcp"].([]any)
-				if !ok || len(portBindings) != 1 {
-					t.Fatalf("PortBindings[8080/tcp] = %#v, want one binding", bindings["8080/tcp"])
-				}
-				binding, ok := portBindings[0].(map[string]any)
-				if !ok || binding["HostIp"] != "127.0.0.1" {
-					t.Errorf("port binding = %#v, want HostIp 127.0.0.1", portBindings[0])
-				}
-			} else if portBindingsValue != nil {
-				bindings, ok := portBindingsValue.(map[string]any)
-				if !ok || len(bindings) != 0 {
-					t.Errorf("HostConfig.PortBindings = %#v, want no published bindings", portBindingsValue)
-				}
-			}
+			runDockerProviderCreateCase(t, tt)
 		})
+	}
+}
+
+func runDockerProviderCreateCase(t *testing.T, tt dockerCreateCase) {
+	t.Helper()
+	observation := &dockerCreateObservation{}
+	provider, cleanup := newTestDockerProvider(t, dockerCreateHandler(t, tt, observation))
+	defer cleanup()
+	provider.Publish = tt.publish
+
+	got, err := provider.Create(context.Background(), CreateRequest{
+		UID: testUID, Owner: "owner-1", Image: testImage, Port: 8080,
+	})
+	if tt.wantErr != "" {
+		if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+			t.Fatalf("Create() error = %v, want it to contain %q", err, tt.wantErr)
+		}
+		if observation.inspectCalls != 0 {
+			t.Errorf("container inspected %d times after create failure, want 0", observation.inspectCalls)
+		}
+		if tt.wantErr == "start container" && !observation.started {
+			t.Error("container was not started")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if got.ID != "container-id" || got.UID != testUID || got.State != StateRunning {
+		t.Errorf("Create() instance = %#v", got)
+	}
+	if !observation.started {
+		t.Error("container was not started")
+	}
+	if observation.inspectCalls != 1 {
+		t.Errorf("container inspected %d times, want 1", observation.inspectCalls)
+	}
+	assertDockerCreateRequest(t, observation.body, tt.publish)
+}
+
+func dockerCreateHandler(t *testing.T, tt dockerCreateCase, observation *dockerCreateObservation) dockerHandler {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == testImageInspectURL:
+			writeDockerResponse(w, defaultHTTPStatus(tt.imageStatus, http.StatusOK), `{"message":"image lookup"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/images/create":
+			writeDockerResponse(w, defaultHTTPStatus(tt.pullStatus, http.StatusOK), `{"status":"downloaded"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+			if err := json.NewDecoder(r.Body).Decode(&observation.body); err != nil {
+				t.Errorf("decode create body: %v", err)
+			}
+			if got := r.URL.Query().Get("name"); got != testContainerName {
+				t.Errorf("create name = %q, want %s", got, testContainerName)
+			}
+			writeDockerResponse(w, defaultHTTPStatus(tt.createCode, http.StatusCreated), `{"Id":"container-id"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/"+testContainerName+"/start":
+			observation.started = true
+			writeDockerResponse(w, defaultHTTPStatus(tt.startCode, http.StatusNoContent), "")
+		case r.Method == http.MethodGet && r.URL.Path == "/containers/"+testContainerName+"/json":
+			observation.inspectCalls++
+			writeDockerResponse(w, http.StatusOK, `{"Id":"container-id","Name":"/workspace-uid-1","State":{"Status":"running"}}`)
+		default:
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL)
+			writeDockerResponse(w, http.StatusNotFound, `{"message":"unexpected request"}`)
+		}
+	}
+}
+
+func defaultHTTPStatus(status, fallback int) int {
+	if status == 0 {
+		return fallback
+	}
+	return status
+}
+
+func assertDockerCreateRequest(t *testing.T, body map[string]any, publish bool) {
+	t.Helper()
+	if body["Image"] != testImage {
+		t.Errorf("create Image = %v, want %s", body["Image"], testImage)
+	}
+	labels, ok := body["Labels"].(map[string]any)
+	if !ok {
+		t.Fatalf("create Labels = %#v, want object", body["Labels"])
+	}
+	for key, want := range map[string]string{
+		LabelManagedBy: managedValue, LabeUID: testUID, LabeOwner: "owner-1",
+	} {
+		if labels[key] != want {
+			t.Errorf("Config.Labels[%q] = %v, want %q", key, labels[key], want)
+		}
+	}
+	hostConfig, ok := body["HostConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("create HostConfig = %#v, want object", body["HostConfig"])
+	}
+	if hostConfig["NetworkMode"] != dockerNetwork {
+		t.Errorf("HostConfig.NetworkMode = %v, want %q", hostConfig["NetworkMode"], dockerNetwork)
+	}
+	portBindingsValue, hasPortBindings := hostConfig["PortBindings"]
+	if publish {
+		assertPublishedPortBinding(t, portBindingsValue, hasPortBindings)
+		return
+	}
+	if portBindingsValue != nil {
+		bindings, ok := portBindingsValue.(map[string]any)
+		if !ok || len(bindings) != 0 {
+			t.Errorf("HostConfig.PortBindings = %#v, want no published bindings", portBindingsValue)
+		}
+	}
+}
+
+func assertPublishedPortBinding(t *testing.T, value any, exists bool) {
+	t.Helper()
+	if !exists {
+		t.Fatal("HostConfig.PortBindings missing, want a published port binding")
+	}
+	bindings, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("HostConfig.PortBindings = %#v, want object", value)
+	}
+	portBindings, ok := bindings["8080/tcp"].([]any)
+	if !ok || len(portBindings) != 1 {
+		t.Fatalf("PortBindings[8080/tcp] = %#v, want one binding", bindings["8080/tcp"])
+	}
+	binding, ok := portBindings[0].(map[string]any)
+	if !ok || binding["HostIp"] != "127.0.0.1" {
+		t.Errorf("port binding = %#v, want HostIp 127.0.0.1", portBindings[0])
 	}
 }
 
 func TestDockerProviderCreateRejectsInvalidPort(t *testing.T) {
 	provider, cleanup := newTestDockerProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/images/test-image/json" {
+		if r.URL.Path == testImageInspectURL {
 			writeDockerResponse(w, http.StatusOK, `{}`)
 			return
 		}
@@ -355,7 +384,7 @@ func TestDockerProviderCreateRejectsInvalidPort(t *testing.T) {
 	defer cleanup()
 
 	_, err := provider.Create(context.Background(), CreateRequest{
-		UID: "uid-1", Image: "test-image", Port: 70000,
+		UID: testUID, Image: testImage, Port: 70000,
 	})
 	if err == nil {
 		t.Fatal("Create() error = nil, want invalid-port error")
@@ -390,7 +419,7 @@ func TestDockerProviderDelete(t *testing.T) {
 			})
 			defer cleanup()
 
-			err := provider.Delete(context.Background(), "uid-1")
+			err := provider.Delete(context.Background(), testUID)
 			if tt.want == nil {
 				if err != nil {
 					t.Fatalf("Delete() error = %v", err)
@@ -438,7 +467,7 @@ func TestDockerProviderList(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("List() returned %d instances, want 2", len(got))
 	}
-	if got[0].ID != "container-1" || got[0].UID != "uid-1" || got[0].State != "running" || got[0].CreatedAt.Unix() != created {
+	if got[0].ID != "container-1" || got[0].UID != testUID || got[0].State != StateRunning || got[0].CreatedAt.Unix() != created {
 		t.Errorf("List()[0] = %#v", got[0])
 	}
 	if got[1].ID != "container-2" || got[1].UID != "" || got[1].State != "exited" || !got[1].CreatedAt.Equal(time.Unix(0, 0)) {

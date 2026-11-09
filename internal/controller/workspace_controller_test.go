@@ -3,12 +3,14 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
 	"github.com/utkarsh2801/docker-workspaces/internal/compute"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +19,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+)
+
+const (
+	testWorkspaceName = "test-workspace"
+	testNamespace     = "default"
 )
 
 var testUID = types.UID("workspace-uid")
@@ -30,6 +37,9 @@ func newTestReconciler(t *testing.T, workspace *workspacesv1alpha1.Workspace, pr
 	}
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add core API to scheme: %v", err)
+	}
+	if err := discoveryv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add discovery API to scheme: %v", err)
 	}
 	if err := networkingv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add networking API to scheme: %v", err)
@@ -55,8 +65,8 @@ func testWorkspace(withFinalizer bool) *workspacesv1alpha1.Workspace {
 	}
 	return &workspacesv1alpha1.Workspace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-workspace",
-			Namespace:  "default",
+			Name:       testWorkspaceName,
+			Namespace:  testNamespace,
 			UID:        testUID,
 			Finalizers: finalizers,
 		},
@@ -71,7 +81,7 @@ func testWorkspace(withFinalizer bool) *workspacesv1alpha1.Workspace {
 func reconcileWorkspace(t *testing.T, reconciler *WorkspaceReconciler) (ctrl.Result, error) {
 	t.Helper()
 	return reconciler.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "test-workspace", Namespace: "default"},
+		NamespacedName: types.NamespacedName{Name: testWorkspaceName, Namespace: testNamespace},
 	})
 }
 
@@ -107,7 +117,7 @@ func TestReconcileAddsFinalizerBeforeProvisioning(t *testing.T) {
 	}
 
 	var got workspacesv1alpha1.Workspace
-	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: "test-workspace", Namespace: "default"}, &got); err != nil {
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: testWorkspaceName, Namespace: testNamespace}, &got); err != nil {
 		t.Fatalf("get Workspace after reconcile: %v", err)
 	}
 	if !containsFinalizer(got.Finalizers, containerFinalizerName) {
@@ -141,7 +151,7 @@ func TestReconcileCreatesMissingInstanceAndUpdatesStatus(t *testing.T) {
 	}
 
 	var got workspacesv1alpha1.Workspace
-	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: "test-workspace", Namespace: "default"}, &got); err != nil {
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: testWorkspaceName, Namespace: testNamespace}, &got); err != nil {
 		t.Fatalf("get Workspace after reconcile: %v", err)
 	}
 	wantStatus := workspacesv1alpha1.WorkspaceStatus{
@@ -160,7 +170,7 @@ func TestReconcileKeepsRunningInstance(t *testing.T) {
 			string(testUID): {
 				ID:    "container-running",
 				UID:   string(testUID),
-				State: "running",
+				State: compute.StateRunning,
 				IP:    "10.0.0.4",
 				URL:   "http://workspace.example.com",
 			},
@@ -181,7 +191,7 @@ func TestReconcileKeepsRunningInstance(t *testing.T) {
 	}
 
 	var got workspacesv1alpha1.Workspace
-	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: "test-workspace", Namespace: "default"}, &got); err != nil {
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: testWorkspaceName, Namespace: testNamespace}, &got); err != nil {
 		t.Fatalf("get Workspace after reconcile: %v", err)
 	}
 	wantStatus := workspacesv1alpha1.WorkspaceStatus{
@@ -196,7 +206,7 @@ func TestReconcileKeepsRunningInstance(t *testing.T) {
 	}
 	for _, resource := range []client.Object{
 		&corev1.Service{},
-		&corev1.Endpoints{},
+		&discoveryv1.EndpointSlice{},
 		&networkingv1.Ingress{},
 	} {
 		if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}, resource); err != nil {
@@ -252,7 +262,7 @@ func TestReconcileReturnsProviderErrors(t *testing.T) {
 func TestReconcileDeletesInstanceAndRemovesFinalizer(t *testing.T) {
 	provider := &FakeProvider{}
 	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
-	key := types.NamespacedName{Name: "test-workspace", Namespace: "default"}
+	key := types.NamespacedName{Name: testWorkspaceName, Namespace: testNamespace}
 
 	var workspace workspacesv1alpha1.Workspace
 	if err := k8sClient.Get(context.Background(), key, &workspace); err != nil {
@@ -284,7 +294,7 @@ func TestReconcileDoesNotRemoveFinalizerWhenDeleteFails(t *testing.T) {
 	deleteErr := errors.New("provider delete failed")
 	provider := &FakeProvider{DeleteErr: deleteErr}
 	reconciler, k8sClient := newTestReconciler(t, testWorkspace(true), provider)
-	key := types.NamespacedName{Name: "test-workspace", Namespace: "default"}
+	key := types.NamespacedName{Name: testWorkspaceName, Namespace: testNamespace}
 
 	var workspace workspacesv1alpha1.Workspace
 	if err := k8sClient.Get(context.Background(), key, &workspace); err != nil {
@@ -308,10 +318,5 @@ func TestReconcileDoesNotRemoveFinalizerWhenDeleteFails(t *testing.T) {
 }
 
 func containsFinalizer(finalizers []string, name string) bool {
-	for _, finalizer := range finalizers {
-		if finalizer == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(finalizers, name)
 }
