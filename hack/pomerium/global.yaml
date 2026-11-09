@@ -4,3 +4,20 @@ metadata:
   name: global
 spec:
   secrets: pomerium/bootstrap
+  authenticate:
+    url: https://authenticate.localhost.pomerium.io
+  certificates:
+    - pomerium/wildcard-localhost-pomerium-io
+  caSecrets:
+    - pomerium/local-ca
+  identityProvider:
+    provider: oidc
+    url: https://dex.localhost.pomerium.io
+    secret: pomerium/dex
+    scopes:
+      - openid
+      - email
+      - profile
+      - groups
+  jwtClaimHeaders:
+    X-Pomerium-Claim-Email: email

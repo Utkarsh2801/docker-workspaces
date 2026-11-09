@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -19,6 +21,7 @@ const (
 	routeServicePort = 80
 	pomeriumPublic   = "ingress.pomerium.io/allow_public_unauthenticated_access"
 	pomeriumHost     = "ingress.pomerium.io/allow_websockets"
+	pomeriumPolicy   = "ingress.pomerium.io/policy"
 )
 
 func routeURL(ws *workspacesv1alpha1.Workspace) string {
@@ -80,16 +83,22 @@ func (r *WorkspaceReconciler) ensureEndpoints(ctx context.Context, ws *workspace
 }
 
 func (r *WorkspaceReconciler) ensureIngress(ctx context.Context, ws *workspacesv1alpha1.Workspace) error {
+	policy, err := ownerPolicy(ws.Spec.Owner)
+	if err != nil {
+		return err
+	}
+
 	ingress := &networkingv1.Ingress{}
 	ingress.Name = ws.Name
 	ingress.Namespace = ws.Namespace
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ingress, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, ingress, func() error {
 		ingress.Labels = mergeLabels(ingress.Labels, ws.Labels)
 		ingress.Annotations = mergeLabels(ingress.Annotations, map[string]string{
-			pomeriumPublic: "true",
 			pomeriumHost:   "true",
+			pomeriumPolicy: policy,
 		})
+		delete(ingress.Annotations, pomeriumPublic)
 		className := "pomerium"
 		pathType := networkingv1.PathTypePrefix
 		ingress.Spec = networkingv1.IngressSpec{
@@ -115,6 +124,28 @@ func (r *WorkspaceReconciler) ensureIngress(ctx context.Context, ws *workspacesv
 		return controllerutil.SetControllerReference(ws, ingress, r.Scheme)
 	})
 	return err
+}
+
+func ownerPolicy(owner string) (string, error) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return "", fmt.Errorf("workspace owner must be set to create an owner-only route policy")
+	}
+
+	policy := []map[string]any{
+		{
+			"allow": map[string]any{
+				"and": []map[string]any{
+					{"email": map[string]string{"is": strings.ToLower(owner)}},
+				},
+			},
+		},
+	}
+	encoded, err := json.Marshal(policy)
+	if err != nil {
+		return "", fmt.Errorf("encode owner policy for %q: %w", owner, err)
+	}
+	return string(encoded), nil
 }
 
 func mergeLabels(existing, additions map[string]string) map[string]string {

@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: workspace-dashboard
+  namespace: docker-workspace-system
+  annotations:
+    ingress.pomerium.io/pass_identity_headers: "true"
+    ingress.pomerium.io/policy: >-
+      [{"allow":{"or":[{"email":{"is":"alice@example.com"}},{"email":{"is":"bob@example.com"}}]}}]
+spec:
+  ingressClassName: pomerium
+  rules:
+    - host: workspaces.localhost.pomerium.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: docker-workspace-dashboard
+                port:
+                  name: http

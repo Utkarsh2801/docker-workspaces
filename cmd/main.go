@@ -38,6 +38,7 @@ import (
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
 	"github.com/utkarsh2801/docker-workspaces/internal/compute"
 	"github.com/utkarsh2801/docker-workspaces/internal/controller"
+	"github.com/utkarsh2801/docker-workspaces/internal/dashboard"
 	webhookv1alpha1 "github.com/utkarsh2801/docker-workspaces/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
@@ -197,6 +198,14 @@ func main() {
 		Compute: dockerProvider,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "workspace")
+		os.Exit(1)
+	}
+	if err := mgr.Add(dashboard.New(
+		mgr.GetClient(),
+		dashboard.Port,
+		"https://workspaces.localhost.pomerium.io",
+	)); err != nil {
+		setupLog.Error(err, "Failed to add workspace dashboard")
 		os.Exit(1)
 	}
 	// nolint:goconst

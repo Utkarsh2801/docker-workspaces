@@ -1,5 +1,7 @@
 resources:
 - manager.yaml
+- dashboard_service.yaml
+- dashboard_network_policy.yaml
 patches:
 - path: docker_socket_patch.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1

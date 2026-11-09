@@ -6,6 +6,24 @@
 
 ## Getting Started
 
+### Workspace dashboard
+
+The controller serves a Pomerium-protected dashboard at
+`https://workspaces.localhost.pomerium.io`. After signing in, use it to create a
+Workspace and open your running Workspaces. The dashboard derives the Workspace
+owner from Pomerium's authenticated email claim; users cannot choose another
+owner. Workspace routes also enforce an owner-only Pomerium policy. The list refreshes
+after changes and periodically to show current Workspace status; users can
+delete their Workspaces from the dashboard.
+
+The form accepts a Kubernetes-compatible name and creates
+`codercom/code-server` Workspaces on port 8080. The admission webhook continues
+to support additional images for Workspaces created outside the dashboard. The
+dashboard sign-out link ends the Pomerium session and returns to the
+authenticate endpoint, which presents the login form. Dashboard-created
+code-server instances disable their own password prompt because Pomerium
+already enforces authenticated, owner-only access to the Workspace route.
+
 ### Prerequisites
 - go version v1.24.6+
 - docker version 17.03+.
@@ -132,4 +150,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
