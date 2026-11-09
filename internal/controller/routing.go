@@ -11,7 +11,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	workspacesv1alpha1 "github.com/utkarsh2801/docker-workspaces/api/v1alpha1"
@@ -66,34 +70,43 @@ func (r *WorkspaceReconciler) ensureEndpoints(ctx context.Context, ws *workspace
 		return fmt.Errorf("workspace %s/%s has invalid endpoint IP %q", ws.Namespace, ws.Name, ip)
 	}
 
-	endpointSlice := &discoveryv1.EndpointSlice{}
-	endpointSlice.Name = ws.Name
-	endpointSlice.Namespace = ws.Namespace
+	// Pomerium's ingress controller reads core Endpoints for backend discovery.
+	endpoints := &corev1.Endpoints{} //nolint:staticcheck // Pomerium still discovers backends from core Endpoints.
+	endpoints.Name = ws.Name
+	endpoints.Namespace = ws.Namespace
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, endpointSlice, func() error {
-		endpointSlice.Labels = mergeLabels(endpointSlice.Labels, ws.Labels)
-		endpointSlice.Labels[discoveryv1.LabelServiceName] = ws.Name
-		addressType := discoveryv1.AddressTypeIPv6
-		if parsedIP.To4() != nil {
-			addressType = discoveryv1.AddressTypeIPv4
-		}
-		endpointSlice.AddressType = addressType
-		portName := routePortName
-		port := ws.Spec.Port
-		protocol := corev1.ProtocolTCP
-		ready := true
-		endpointSlice.Endpoints = []discoveryv1.Endpoint{{
-			Addresses:  []string{ip},
-			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, endpoints, func() error {
+		endpoints.Labels = mergeLabels(endpoints.Labels, ws.Labels)
+		endpoints.Subsets = []corev1.EndpointSubset{{ //nolint:staticcheck // Required by Pomerium's Endpoints-based discovery.
+			Addresses: []corev1.EndpointAddress{{IP: ip}},
+			Ports: []corev1.EndpointPort{{
+				Name:     routePortName,
+				Port:     ws.Spec.Port,
+				Protocol: corev1.ProtocolTCP,
+			}},
 		}}
-		endpointSlice.Ports = []discoveryv1.EndpointPort{{
-			Name:     &portName,
-			Port:     &port,
-			Protocol: &protocol,
-		}}
-		return controllerutil.SetControllerReference(ws, endpointSlice, r.Scheme)
+		return controllerutil.SetControllerReference(ws, endpoints, r.Scheme)
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	return r.deleteObsoleteEndpointSlice(ctx, ws)
+}
+
+func (r *WorkspaceReconciler) deleteObsoleteEndpointSlice(ctx context.Context, ws *workspacesv1alpha1.Workspace) error {
+	endpointSlice := &discoveryv1.EndpointSlice{}
+	key := types.NamespacedName{Name: ws.Name, Namespace: ws.Namespace}
+	if err := r.Get(ctx, key, endpointSlice); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !metav1.IsControlledBy(endpointSlice, ws) {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, endpointSlice))
 }
 
 func (r *WorkspaceReconciler) ensureIngress(ctx context.Context, ws *workspacesv1alpha1.Workspace) error {

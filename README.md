@@ -28,6 +28,8 @@ directly.
   finalizer for container cleanup.
 - Creates a selectorless Kubernetes Service and Endpoints pointing to the
   container's IP on the Kind Docker network.
+- Uses the core `Endpoints` resource for Pomerium backend discovery; Kubernetes
+  mirrors it into EndpointSlices for modern API consumers.
 - Creates an owner-only Pomerium Ingress at
   `https://<workspace-name>.localhost.pomerium.io`.
 - Serves a Pomerium-protected dashboard at
@@ -84,6 +86,8 @@ flowchart TD
    finalizer, and asks the Docker provider to pull/create/start the container.
 6. The controller inspects the container, records its IP and status, and
    reconciles a selectorless Service, Endpoints, and Pomerium Ingress.
+   The installed Pomerium ingress controller discovers backends from core
+   `Endpoints`, which Kubernetes mirrors into EndpointSlices.
 7. When the container is running, the Workspace status contains its
    `https://<name>.localhost.pomerium.io` URL. The dashboard refreshes the
    Workspace list and offers an **Open** link.
@@ -246,9 +250,23 @@ The CoreDNS change affects DNS for the whole cluster. Inspect the proposed
 Corefile and understand its effect before applying it to any shared cluster.
 
 The Pomerium dashboard Ingress currently has an example allow policy for
-`alice@example.com` and `bob@example.com`. Change that allowlist to the
-identities appropriate for your environment before use. Workspace Ingresses
-are generated individually with a policy for the Workspace owner.
+`alice@example.com`, `bob@example.com`, `charlie@example.com`, and
+`dana@example.com`. Change that allowlist to the identities appropriate for
+your environment before use. To add a local Dex account, add a
+`staticPasswords` entry with a unique user ID and bcrypt hash to
+`hack/auth/dex.yaml`, add its email to the dashboard allowlist in
+`hack/pomerium/dashboard.yaml`, and apply the updated files:
+
+```sh
+kubectl apply -f hack/auth/dex.yaml
+kubectl -n dex rollout restart deployment/dex
+kubectl apply -f hack/pomerium/dashboard.yaml
+```
+
+Generate bcrypt hashes locally with `htpasswd -nBC 10 <username>`; do not put
+plaintext passwords in the manifest or commit local authentication files.
+Workspace Ingresses are generated individually with a policy for the Workspace
+owner.
 
 The files under `hack/auth/`, when present in a local working copy, are
 development-only Dex, certificate, and CoreDNS examples. They may contain

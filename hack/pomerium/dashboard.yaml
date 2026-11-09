@@ -6,7 +6,7 @@ metadata:
   annotations:
     ingress.pomerium.io/pass_identity_headers: "true"
     ingress.pomerium.io/policy: >-
-      [{"allow":{"or":[{"email":{"is":"alice@example.com"}},{"email":{"is":"bob@example.com"}}]}}]
+      [{"allow":{"or":[{"email":{"is":"alice@example.com"}},{"email":{"is":"bob@example.com"}},{"email":{"is":"charlie@example.com"}},{"email":{"is":"dana@example.com"}}]}}]
 spec:
   ingressClassName: pomerium
   rules:

@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,8 +27,25 @@ func TestEnsureRoutingCreatesServiceEndpointsAndIngress(t *testing.T) {
 
 	key := types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}
 	assertWorkspaceService(t, k8sClient, key, workspace)
-	assertWorkspaceEndpointSlice(t, k8sClient, key, workspace, "10.10.0.4")
+	assertWorkspaceEndpoints(t, k8sClient, key, workspace, "10.10.0.4")
 	assertWorkspaceIngress(t, k8sClient, key, workspace)
+}
+
+func assertWorkspaceEndpoints(t *testing.T, k8sClient client.Client, key types.NamespacedName, workspace *workspacesv1alpha1.Workspace, ip string) {
+	t.Helper()
+	var endpoints corev1.Endpoints //nolint:staticcheck // Pomerium still discovers backends from core Endpoints.
+	if err := k8sClient.Get(context.Background(), key, &endpoints); err != nil {
+		t.Fatalf("get Endpoints: %v", err)
+	}
+	if len(endpoints.Subsets) != 1 || len(endpoints.Subsets[0].Addresses) != 1 || len(endpoints.Subsets[0].Ports) != 1 {
+		t.Fatalf("Endpoints = %+v, want one address and one port", endpoints.Subsets)
+	}
+	if got := endpoints.Subsets[0].Addresses[0].IP; got != ip {
+		t.Errorf("Endpoints address = %q, want %q", got, ip)
+	}
+	if got := endpoints.Subsets[0].Ports[0]; got.Name != routePortName || got.Port != workspace.Spec.Port {
+		t.Errorf("Endpoints port = %+v, want name %q port %d", got, routePortName, workspace.Spec.Port)
+	}
 }
 
 func assertWorkspaceService(t *testing.T, k8sClient client.Client, key types.NamespacedName, workspace *workspacesv1alpha1.Workspace) {
@@ -47,29 +65,6 @@ func assertWorkspaceService(t *testing.T, k8sClient client.Client, key types.Nam
 	}
 	if service.Labels["workspaces.example.com/owner"] != "owner_at_example.com" {
 		t.Errorf("Service labels = %v, owner label was not propagated", service.Labels)
-	}
-}
-
-func assertWorkspaceEndpointSlice(t *testing.T, k8sClient client.Client, key types.NamespacedName, workspace *workspacesv1alpha1.Workspace, ip string) {
-	t.Helper()
-	var endpointSlice discoveryv1.EndpointSlice
-	if err := k8sClient.Get(context.Background(), key, &endpointSlice); err != nil {
-		t.Fatalf("get EndpointSlice: %v", err)
-	}
-	if endpointSlice.AddressType != discoveryv1.AddressTypeIPv4 ||
-		len(endpointSlice.Endpoints) != 1 ||
-		len(endpointSlice.Endpoints[0].Addresses) != 1 ||
-		len(endpointSlice.Ports) != 1 {
-		t.Fatalf("EndpointSlice = %+v, want one IPv4 endpoint and one port", endpointSlice)
-	}
-	if got := endpointSlice.Endpoints[0]; got.Addresses[0] != ip || got.Conditions.Ready == nil || !*got.Conditions.Ready {
-		t.Errorf("EndpointSlice endpoint = %+v, want ready endpoint at %s", got, ip)
-	}
-	if got := endpointSlice.Ports[0]; got.Name == nil || *got.Name != routePortName || got.Port == nil || *got.Port != workspace.Spec.Port {
-		t.Errorf("EndpointSlice port = %+v, want %q port %d", got, routePortName, workspace.Spec.Port)
-	}
-	if endpointSlice.Labels[discoveryv1.LabelServiceName] != workspace.Name {
-		t.Errorf("EndpointSlice service label = %q, want %q", endpointSlice.Labels[discoveryv1.LabelServiceName], workspace.Name)
 	}
 }
 
@@ -181,6 +176,15 @@ func TestEnsureRoutingUpdatesExistingResources(t *testing.T) {
 			},
 		},
 	}
+	existingEndpoints := &corev1.Endpoints{ //nolint:staticcheck // Pomerium still discovers backends from core Endpoints.
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      workspace.Name,
+			Namespace: workspace.Namespace,
+		},
+		Subsets: []corev1.EndpointSubset{{ //nolint:staticcheck // Required by Pomerium's Endpoints-based discovery.
+			Addresses: []corev1.EndpointAddress{{IP: "10.10.0.4"}},
+		}},
+	}
 	provider := &FakeProvider{}
 	reconciler, k8sClient := newTestReconciler(t, workspace, provider)
 	if err := k8sClient.Create(context.Background(), existingService); err != nil {
@@ -188,6 +192,9 @@ func TestEnsureRoutingUpdatesExistingResources(t *testing.T) {
 	}
 	if err := k8sClient.Create(context.Background(), existingIngress); err != nil {
 		t.Fatalf("create existing Ingress: %v", err)
+	}
+	if err := k8sClient.Create(context.Background(), existingEndpoints); err != nil {
+		t.Fatalf("create existing Endpoints: %v", err)
 	}
 
 	if err := reconciler.ensureRouting(context.Background(), workspace, "10.10.0.5"); err != nil {
@@ -202,12 +209,12 @@ func TestEnsureRoutingUpdatesExistingResources(t *testing.T) {
 		t.Errorf("existing Service label was not preserved: %v", service.Labels)
 	}
 
-	var endpointSlice discoveryv1.EndpointSlice
-	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(workspace), &endpointSlice); err != nil {
-		t.Fatalf("get updated EndpointSlice: %v", err)
+	var endpoints corev1.Endpoints //nolint:staticcheck // Pomerium still discovers backends from core Endpoints.
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(workspace), &endpoints); err != nil {
+		t.Fatalf("get updated Endpoints: %v", err)
 	}
-	if got := endpointSlice.Endpoints[0].Addresses[0]; got != "10.10.0.5" {
-		t.Errorf("endpoint IP = %q, want updated IP 10.10.0.5", got)
+	if got := endpoints.Subsets[0].Addresses[0].IP; got != "10.10.0.5" {
+		t.Errorf("Endpoints IP = %q, want updated IP 10.10.0.5", got)
 	}
 
 	var ingress networkingv1.Ingress
@@ -229,5 +236,34 @@ func TestEnsureRoutingRejectsInvalidEndpointIP(t *testing.T) {
 	err := reconciler.ensureRouting(context.Background(), workspace, "not-an-ip")
 	if err == nil {
 		t.Fatal("ensureRouting() error = nil, want invalid endpoint IP error")
+	}
+}
+
+func TestEnsureRoutingDeletesObsoleteOwnedEndpointSlice(t *testing.T) {
+	workspace := testWorkspace(true)
+	controller := true
+	obsoleteSlice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      workspace.Name,
+			Namespace: workspace.Namespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: workspacesv1alpha1.GroupVersion.String(),
+				Kind:       "Workspace",
+				Name:       workspace.Name,
+				UID:        workspace.UID,
+				Controller: &controller,
+			}},
+		},
+	}
+	reconciler, k8sClient := newTestReconciler(t, workspace, &FakeProvider{})
+	if err := k8sClient.Create(context.Background(), obsoleteSlice); err != nil {
+		t.Fatalf("create obsolete EndpointSlice: %v", err)
+	}
+
+	if err := reconciler.ensureRouting(context.Background(), workspace, "10.10.0.4"); err != nil {
+		t.Fatalf("ensureRouting() error = %v", err)
+	}
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(workspace), &discoveryv1.EndpointSlice{}); !apierrors.IsNotFound(err) {
+		t.Errorf("obsolete EndpointSlice lookup error = %v, want NotFound", err)
 	}
 }

@@ -206,7 +206,7 @@ func TestReconcileKeepsRunningInstance(t *testing.T) {
 	}
 	for _, resource := range []client.Object{
 		&corev1.Service{},
-		&discoveryv1.EndpointSlice{},
+		&corev1.Endpoints{}, //nolint:staticcheck // Pomerium still discovers backends from core Endpoints.
 		&networkingv1.Ingress{},
 	} {
 		if err := k8sClient.Get(context.Background(), types.NamespacedName{Name: workspace.Name, Namespace: workspace.Namespace}, resource); err != nil {

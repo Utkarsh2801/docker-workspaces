@@ -22,7 +22,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -47,7 +46,8 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=workspaces.example.com,resources=workspaces/finalizers,verbs=update
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;endpoints,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -102,12 +102,6 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	if inst.IP != "" {
-		if err := r.ensureRouting(ctx, &ws, inst.IP); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
 	if inst.State == compute.StateRunning && inst.IP != "" {
 		if err := r.ensureRouting(ctx, &ws, inst.IP); err != nil {
 			return ctrl.Result{}, err
@@ -148,7 +142,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workspacesv1alpha1.Workspace{}).
 		Owns(&corev1.Service{}).
-		Owns(&discoveryv1.EndpointSlice{}).
+		Owns(&corev1.Endpoints{}). //nolint:staticcheck // Pomerium still discovers backends from core Endpoints.
 		Owns(&networkingv1.Ingress{}).
 		Named("workspace").
 		Complete(r)
