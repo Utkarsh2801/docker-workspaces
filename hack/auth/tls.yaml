@@ -1,0 +1,55 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned
+  namespace: pomerium
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: local-ca
+  namespace: pomerium
+spec:
+  isCA: true
+  commonName: docker-workspaces local CA
+  secretName: local-ca
+  duration: 8760h
+  nameConstraints:
+    critical: true
+    permitted:
+      dnsDomains:
+        - localhost.pomerium.io
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    kind: Issuer
+    name: selfsigned
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: local-ca
+  namespace: pomerium
+spec:
+  ca:
+    secretName: local-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard
+  namespace: pomerium
+spec:
+  secretName: wildcard-localhost-pomerium-io
+  dnsNames:
+    - "*.localhost.pomerium.io"
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    kind: Issuer
+    name: local-ca

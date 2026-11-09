@@ -28,3 +28,6 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Local Dex configuration contains development client credentials and password hashes.
+/hack/auth/dex.yaml

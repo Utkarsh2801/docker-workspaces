@@ -223,11 +223,12 @@ working copy. Configure Pomerium with:
   and by Pomerium for the provider connection.
 - DNS resolution for the local hostnames to the Pomerium proxy.
 
-For the local development setup used with this repository, the following
-additional manifests may be present in your working copy. They are intentionally
-not tracked in a clean checkout, are not part of the project distribution, and
-can contain development credentials. After installing cert-manager, apply the
-local Pomerium base first to create its namespace and CRDs, then create the
+For the local development setup, apply the Pomerium base first to create its
+namespace and CRDs. The checked-in `hack/auth/tls.yaml` and
+`hack/auth/coredns.yaml` are optional local-cluster examples; review their
+effects before applying. Dex account configuration is kept in the untracked,
+git-ignored `hack/auth/dex.yaml` because it contains local client credentials
+and password hashes. Create that file for your environment, then apply the
 local CA, Dex provider, and global Pomerium configuration:
 
 ```sh
@@ -268,10 +269,10 @@ plaintext passwords in the manifest or commit local authentication files.
 Workspace Ingresses are generated individually with a policy for the Workspace
 owner.
 
-The files under `hack/auth/`, when present in a local working copy, are
-development-only Dex, certificate, and CoreDNS examples. They may contain
-test credentials and local cluster-specific changes; review them carefully and
-do not publish real secrets or apply these examples to a production cluster.
+The files under `hack/auth/` are development-only examples. The Dex config
+contains local credentials and is intentionally not tracked. Review the
+certificate and CoreDNS manifests and do not apply these examples to production
+or shared clusters.
 
 ### 3. Build and deploy the operator
 
