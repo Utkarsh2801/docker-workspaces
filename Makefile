@@ -49,7 +49,7 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(YEAR) paths="./..."
+	"$(CONTROLLER_GEN)" object:headerFile="config/boilerplate.go.txt",year=$(YEAR) paths="./..."
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -82,7 +82,7 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
 		*) \
 			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			$(KIND) create cluster --name $(KIND_CLUSTER) --config hack/kind-e2e-config.yaml ;; \
+			$(KIND) create cluster --name $(KIND_CLUSTER) --config config/local-dev/kind-e2e.yaml ;; \
 	esac
 
 .PHONY: test-e2e

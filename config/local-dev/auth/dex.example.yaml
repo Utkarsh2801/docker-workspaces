@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dex
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex
+  namespace: dex
+data:
+  config.yaml: |
+    issuer: https://dex.localhost.pomerium.io
+    storage:
+      type: memory
+    web:
+      http: 0.0.0.0:5556
+    telemetry:
+      http: 0.0.0.0:5558
+    oauth2:
+      skipApprovalScreen: true
+    staticClients:
+      - id: pomerium
+        name: Pomerium
+        secret: REPLACE_WITH_LOCAL_CLIENT_SECRET
+        redirectURIs:
+          - https://authenticate.localhost.pomerium.io/oauth2/callback
+    enablePasswordDB: true
+    staticPasswords:
+      - email: alice@example.com
+        username: alice
+        userID: 7e1b0c4e-0000-4000-8000-000000000001
+        hash: REPLACE_WITH_BCRYPT_HASH
+      - email: bob@example.com
+        username: bob
+        userID: 7e1b0c4e-0000-4000-8000-000000000002
+        hash: REPLACE_WITH_BCRYPT_HASH
+      - email: charlie@example.com
+        username: charlie
+        userID: 7e1b0c4e-0000-4000-8000-000000000003
+        hash: REPLACE_WITH_BCRYPT_HASH
+      - email: dana@example.com
+        username: dana
+        userID: 7e1b0c4e-0000-4000-8000-000000000004
+        hash: REPLACE_WITH_BCRYPT_HASH
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dex
+  template:
+    metadata:
+      labels:
+        app: dex
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.46.1
+          args: ["dex", "serve", "/etc/dex/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 5556
+            - name: telemetry
+              containerPort: 5558
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: telemetry
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex
+      volumes:
+        - name: config
+          configMap:
+            name: dex
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  selector:
+    app: dex
+  ports:
+    - name: http
+      port: 5556
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dex
+  namespace: dex
+  annotations:
+    ingress.pomerium.io/allow_public_unauthenticated_access: "true"
+spec:
+  ingressClassName: pomerium
+  rules:
+    - host: dex.localhost.pomerium.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dex
+                port:
+                  name: http
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dex
+  namespace: pomerium
+type: Opaque
+stringData:
+  client_id: pomerium
+  client_secret: REPLACE_WITH_LOCAL_CLIENT_SECRET
